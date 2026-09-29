@@ -8,6 +8,7 @@ import {
 } from './data/sampleTravelData';
 import { calculateNights } from './utils/formatters';
 import { extractPlanSections } from './utils/planParser';
+import { sendTripPlanToN8n, PRODUCTION_N8N_WEBHOOK_URL } from './utils/webhookClient';
 import { Navbar } from './components/Navbar';
 import { SearchHero } from './components/SearchHero';
 import { N8nPlanDisplay } from './components/N8nPlanDisplay';
@@ -20,8 +21,6 @@ import { ChatAssistant } from './components/ChatAssistant';
 import { N8nWebhookModal } from './components/N8nWebhookModal';
 import { Footer } from './components/Footer';
 import { Bot, CheckCircle } from 'lucide-react';
-
-const PRODUCTION_N8N_WEBHOOK_URL = 'https://bhagya4478.app.n8n.cloud/webhook/tripgenie-travel';
 
 export default function App() {
   // Initial trip search parameters
@@ -179,62 +178,42 @@ export default function App() {
     const targetWebhookUrl = PRODUCTION_N8N_WEBHOOK_URL;
 
     try {
-      // Send POST request with Content-Type application/json
-      const response = await fetch('/api/webhook-proxy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          webhookUrl: targetWebhookUrl,
-          payload: webhookPayload,
-          headers: webhookConfig.authToken ? { Authorization: `Bearer ${webhookConfig.authToken}` } : {},
-        }),
+      // Send POST request directly to the n8n webhook with the user's travel form parameters
+      const result = await sendTripPlanToN8n(targetWebhookUrl, {
+        departureCity: searchParams.departureCity,
+        destination: searchParams.destination,
+        departureDate: searchParams.departureDate,
+        returnDate: searchParams.returnDate,
+        travellers: searchParams.travellers,
+        budgetINR: searchParams.budgetINR,
+        nights,
+        travelStyle: searchParams.travelStyle,
+        cabinClass: searchParams.cabinClass,
+        authToken: webhookConfig.authToken,
       });
 
-      // 1. Check HTTP response status before parsing
-      const httpStatus = response.status;
-
-      // 2. Read the response as text first
-      const rawText = await response.text();
-
-      // 3. Parse text as JSON safely
-      let result: any = null;
-      let isJson = false;
-      try {
-        result = JSON.parse(rawText);
-        isJson = true;
-      } catch {
-        isJson = false;
-      }
-
-      if (!response.ok) {
-        // Display the actual HTTP status and response text for debugging
-        const errorDetail = isJson && result?.error ? result.error : rawText || response.statusText;
-        setWebhookStatus('error');
-        setWebhookError(`HTTP ${httpStatus}: ${errorDetail}`);
-        showNotificationToast(`Request failed (HTTP ${httpStatus})`);
-        return;
-      }
-
-      if (!isJson) {
-        setWebhookStatus('error');
-        setWebhookError(`HTTP ${httpStatus}: Webhook returned non-JSON response: "${rawText.substring(0, 300)}"`);
-        showNotificationToast('Non-JSON response received');
-        return;
-      }
-
-      // Check if proxy reported an error from n8n webhook
+      // 1. Check HTTP response status
       if (!result.success) {
-        const errorDetail = result.error || (result.rawText ? `HTTP ${result.status || 500}: ${result.rawText}` : `HTTP ${result.status || 500}`);
+        // Display the actual HTTP status and response text for debugging
+        const errorDetail = result.error || (result.rawText ? `HTTP ${result.status}: ${result.rawText}` : `HTTP ${result.status || 500}`);
         setWebhookStatus('error');
         setWebhookError(errorDetail);
         showNotificationToast(`Webhook error: ${errorDetail}`);
         return;
       }
 
-      // 4. Verify data object containing status and travelPlan fields
+      // 2. Validate JSON structure
+      if (!result.isJson) {
+        setWebhookStatus('error');
+        setWebhookError(`HTTP ${result.status}: Webhook returned non-JSON response: "${result.rawText.substring(0, 300)}"`);
+        showNotificationToast('Non-JSON response received');
+        return;
+      }
+
+      // 3. Verify data object containing status and travelPlan fields
       const data = result.data;
       if (!data || typeof data !== 'object') {
-        const errorDetail = `HTTP ${result.status || 200}: Webhook response data is not a JSON object. Raw response: "${String(result.rawText || rawText).substring(0, 300)}"`;
+        const errorDetail = `HTTP ${result.status}: Webhook response data is not a JSON object. Raw response: "${String(result.rawText).substring(0, 300)}"`;
         setWebhookStatus('error');
         setWebhookError(errorDetail);
         showNotificationToast('Invalid JSON structure');
@@ -246,17 +225,17 @@ export default function App() {
       const isSuccess = statusValue === 'success' || statusValue === 'ok' || statusValue === 'true' || !data.status;
 
       if (!isSuccess) {
-        const errorDetail = data.message || data.error || `HTTP ${result.status || 200}: Webhook returned status "${data.status}"`;
+        const errorDetail = data.message || data.error || `HTTP ${result.status}: Webhook returned status "${data.status}"`;
         setWebhookStatus('error');
         setWebhookError(errorDetail);
         showNotificationToast(`Webhook status: ${errorDetail}`);
         return;
       }
 
-      // 5. If response is successful, extract and display only the travelPlan field
+      // 4. If response is successful, extract and display only the travelPlan field
       const travelPlanRaw = data.travelPlan || data.travel_plan || data.plan;
       if (!travelPlanRaw) {
-        const errorDetail = `HTTP ${result.status || 200}: "travelPlan" field was empty or missing in JSON response. Keys received: ${Object.keys(data).join(', ')}`;
+        const errorDetail = `HTTP ${result.status}: "travelPlan" field was empty or missing in JSON response. Keys received: ${Object.keys(data).join(', ')}`;
         setWebhookStatus('error');
         setWebhookError(errorDetail);
         showNotificationToast('Missing travelPlan in response');

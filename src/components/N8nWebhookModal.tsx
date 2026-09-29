@@ -86,35 +86,67 @@ export const N8nWebhookModal: React.FC<N8nWebhookModalProps> = ({
     }
 
     try {
-      const response = await fetch('/api/webhook-proxy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          webhookUrl,
-          payload: exportPayload,
-        }),
-      });
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json, text/plain, */*',
+      };
+      if (authToken) {
+        headers['Authorization'] = `Bearer ${authToken}`;
+      }
 
-      const data = await response.json();
+      let response: Response;
+      let rawText = '';
+      let isDirect = true;
 
-      if (response.ok && data.success) {
+      try {
+        response = await fetch(webhookUrl, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(exportPayload),
+        });
+        rawText = await response.text();
+      } catch (directErr) {
+        isDirect = false;
+        // Fallback to proxy
+        response = await fetch('/api/webhook-proxy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            webhookUrl,
+            payload: exportPayload,
+            headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+          }),
+        });
+        rawText = await response.text();
+      }
+
+      let data: any = null;
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        data = null;
+      }
+
+      if (response.ok && (isDirect || data?.success)) {
+        const payloadData = isDirect ? (data || rawText) : (data?.data || data);
         setTestResult({
           status: 'success',
-          message: `Webhook successfully received by n8n! HTTP ${data.status || 200}`,
-          responseData: data.data || data,
+          message: `Webhook successfully reached n8n! HTTP ${response.status}`,
+          responseData: payloadData,
         });
         onSaveConfig({
           webhookUrl,
           authToken,
           isActive: true,
           lastTestStatus: 'success',
-          lastResponse: data,
+          lastResponse: payloadData,
         });
       } else {
+        const errorDetail = !isDirect && data?.error ? data.error : (data?.message || rawText.substring(0, 200) || `HTTP ${response.status}`);
         setTestResult({
           status: 'error',
-          message: data.error || 'Failed to dispatch webhook. Check URL accessibility.',
-          responseData: data,
+          message: `Failed to dispatch webhook (HTTP ${response.status}): ${errorDetail}`,
+          responseData: data || rawText,
         });
         onSaveConfig({
           webhookUrl,
@@ -126,7 +158,7 @@ export const N8nWebhookModal: React.FC<N8nWebhookModalProps> = ({
     } catch (err: any) {
       setTestResult({
         status: 'error',
-        message: err.message || 'Network error reaching proxy endpoint',
+        message: err.message || 'Network error reaching webhook endpoint',
       });
     } finally {
       setIsSending(false);
