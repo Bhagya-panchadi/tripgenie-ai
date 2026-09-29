@@ -1,0 +1,6 @@
+{
+  "name": "TripGenie AI - Intelligent Travel Agent & Trip Planner",
+  "description": "AI-powered travel agent for personalized flights, hotels, day-by-day itineraries, sightseeing, and budget breakdown in INR with n8n automation readiness.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
