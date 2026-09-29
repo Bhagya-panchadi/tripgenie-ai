@@ -100,7 +100,27 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, cla
       continue;
     }
 
-    // Headings
+    // Horizontal Rule (---, ***, ___)
+    if (/^([-*_]){3,}$/.test(line)) {
+      flushList(`hr-${i}`);
+      elements.push(
+        <hr key={`hr-${i}`} className="my-5 border-t border-slate-800" />
+      );
+      continue;
+    }
+
+    // Headings (h4, h3, h2, h1)
+    if (line.startsWith('#### ')) {
+      flushList(`h4-${i}`);
+      elements.push(
+        <h5 key={`h4-${i}`} className="text-sm sm:text-base font-bold text-sky-300 mt-3.5 mb-1.5 flex items-center gap-2">
+          <span className="w-1.5 h-1.5 rounded-full bg-sky-400 inline-block" />
+          {parseInlineMarkdown(line.replace(/^####\s+/, ''))}
+        </h5>
+      );
+      continue;
+    }
+
     if (line.startsWith('### ')) {
       flushList(`h3-${i}`);
       elements.push(

@@ -157,7 +157,7 @@ export default function App() {
     setWebhookError(null);
     setN8nPlanResult(null);
 
-    // Prepare JSON payload with the exact requested parameters
+    // Prepare JSON payload with the user's actual travel form values
     const webhookPayload = {
       departure_city: searchParams.departureCity,
       destination: searchParams.destination,
@@ -165,7 +165,7 @@ export default function App() {
       return_date: searchParams.returnDate,
       travellers: searchParams.travellers,
       budget: searchParams.budgetINR,
-      // Additional helpful metadata for n8n AI agent nodes
+      // Supporting parameters
       total_budget_inr: searchParams.budgetINR,
       currency: 'INR',
       nights,
@@ -175,10 +175,11 @@ export default function App() {
       applet_id: '3bfdae99-afd8-477e-81e2-7a8d40e5f895',
     };
 
-    const targetWebhookUrl = webhookConfig.webhookUrl || PRODUCTION_N8N_WEBHOOK_URL;
+    // Strict requirement: Always send a POST request to the production URL, not the test URL
+    const targetWebhookUrl = PRODUCTION_N8N_WEBHOOK_URL;
 
     try {
-      // Send POST request to n8n webhook via proxy to prevent browser CORS block
+      // Send POST request with Content-Type application/json
       const response = await fetch('/api/webhook-proxy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -190,41 +191,53 @@ export default function App() {
       });
 
       // 1. Check HTTP response status before parsing
-      if (!response.ok) {
-        setWebhookStatus('error');
-        setWebhookError(`Network error: Proxy service returned HTTP ${response.status} (${response.statusText})`);
-        showNotificationToast(`Request error (HTTP ${response.status})`);
-        return;
-      }
+      const httpStatus = response.status;
 
-      // 2. Read the response safely and parse JSON only when valid JSON
+      // 2. Read the response as text first
+      const rawText = await response.text();
+
+      // 3. Parse text as JSON safely
       let result: any = null;
+      let isJson = false;
       try {
-        result = await response.json();
-      } catch (parseErr) {
-        // 3. If response is not valid JSON, show a clear error message instead of displaying a JSON parsing error
+        result = JSON.parse(rawText);
+        isJson = true;
+      } catch {
+        isJson = false;
+      }
+
+      if (!response.ok) {
+        // Display the actual HTTP status and response text for debugging
+        const errorDetail = isJson && result?.error ? result.error : rawText || response.statusText;
         setWebhookStatus('error');
-        setWebhookError('The server received an invalid or unparseable response. Expected a valid JSON object with status and travelPlan.');
-        showNotificationToast('Invalid response format received');
+        setWebhookError(`HTTP ${httpStatus}: ${errorDetail}`);
+        showNotificationToast(`Request failed (HTTP ${httpStatus})`);
         return;
       }
 
-      // Check if proxy encountered an error or non-OK response from the n8n webhook
+      if (!isJson) {
+        setWebhookStatus('error');
+        setWebhookError(`HTTP ${httpStatus}: Webhook returned non-JSON response: "${rawText.substring(0, 300)}"`);
+        showNotificationToast('Non-JSON response received');
+        return;
+      }
+
+      // Check if proxy reported an error from n8n webhook
       if (!result.success) {
-        const errorMsg = result.error || (result.data && typeof result.data === 'object' && result.data.message) || `n8n Webhook returned HTTP ${result.status || 'Error'}`;
+        const errorDetail = result.error || (result.rawText ? `HTTP ${result.status || 500}: ${result.rawText}` : `HTTP ${result.status || 500}`);
         setWebhookStatus('error');
-        setWebhookError(errorMsg);
-        showNotificationToast(`n8n Webhook Notice: ${errorMsg}`);
-        // 5. Do not show simulated or sample travel plans when the webhook request fails
+        setWebhookError(errorDetail);
+        showNotificationToast(`Webhook error: ${errorDetail}`);
         return;
       }
 
-      // 4. Verify data structure from n8n webhook (status and travelPlan fields)
+      // 4. Verify data object containing status and travelPlan fields
       const data = result.data;
       if (!data || typeof data !== 'object') {
+        const errorDetail = `HTTP ${result.status || 200}: Webhook response data is not a JSON object. Raw response: "${String(result.rawText || rawText).substring(0, 300)}"`;
         setWebhookStatus('error');
-        setWebhookError('The webhook response did not contain a valid JSON object. Expected { status, travelPlan }.');
-        showNotificationToast('Invalid JSON structure from webhook');
+        setWebhookError(errorDetail);
+        showNotificationToast('Invalid JSON structure');
         return;
       }
 
@@ -233,18 +246,19 @@ export default function App() {
       const isSuccess = statusValue === 'success' || statusValue === 'ok' || statusValue === 'true' || !data.status;
 
       if (!isSuccess) {
-        const errorMsg = data.message || data.error || `Webhook indicated status: "${data.status}"`;
+        const errorDetail = data.message || data.error || `HTTP ${result.status || 200}: Webhook returned status "${data.status}"`;
         setWebhookStatus('error');
-        setWebhookError(errorMsg);
-        showNotificationToast(`Webhook status: ${errorMsg}`);
+        setWebhookError(errorDetail);
+        showNotificationToast(`Webhook status: ${errorDetail}`);
         return;
       }
 
-      // Extract travelPlan field specifically
+      // 5. If response is successful, extract and display only the travelPlan field
       const travelPlanRaw = data.travelPlan || data.travel_plan || data.plan;
       if (!travelPlanRaw) {
+        const errorDetail = `HTTP ${result.status || 200}: "travelPlan" field was empty or missing in JSON response. Keys received: ${Object.keys(data).join(', ')}`;
         setWebhookStatus('error');
-        setWebhookError('Webhook returned status success, but the "travelPlan" field was empty or missing.');
+        setWebhookError(errorDetail);
         showNotificationToast('Missing travelPlan in response');
         return;
       }
@@ -266,7 +280,7 @@ export default function App() {
         sections: parsedSections,
       });
 
-      showNotificationToast('Received AI travel plan from n8n webhook!');
+      showNotificationToast('AI travel plan received from n8n webhook!');
 
       // Smooth scroll to display the returned plan
       setTimeout(() => {
@@ -277,10 +291,10 @@ export default function App() {
       }, 100);
     } catch (err: any) {
       console.error('Failed to dispatch to n8n webhook:', err);
-      const errorMsg = err.message || 'Failed to connect to the n8n webhook. Please check network connectivity.';
+      const errorMsg = `Network error: ${err.message || err}`;
       setWebhookStatus('error');
       setWebhookError(errorMsg);
-      showNotificationToast(`Webhook error: ${errorMsg}`);
+      showNotificationToast(errorMsg);
     } finally {
       setIsGenerating(false);
     }

@@ -83,7 +83,7 @@ Guidelines:
 app.post('/api/webhook-proxy', async (req, res) => {
   const { webhookUrl, payload, headers: customHeaders } = req.body;
   if (!webhookUrl) {
-    return res.status(400).json({ success: false, error: 'Missing webhookUrl parameter' });
+    return res.status(400).json({ success: false, status: 400, error: 'Missing webhookUrl parameter' });
   }
 
   try {
@@ -97,13 +97,23 @@ app.post('/api/webhook-proxy', async (req, res) => {
       Object.assign(fetchHeaders, customHeaders);
     }
 
-    const fetchResponse = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: fetchHeaders,
-      body: JSON.stringify(payload),
-    });
+    // Set a 30s timeout controller for AI workflows
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 45000);
 
-    // 1. Check HTTP response status before parsing
+    let fetchResponse: Response;
+    try {
+      fetchResponse = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: fetchHeaders,
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
+    // 1. Check HTTP response status
     const httpStatus = fetchResponse.status;
     const isHttpOk = fetchResponse.ok; // 200-299
 
@@ -123,16 +133,13 @@ app.post('/api/webhook-proxy', async (req, res) => {
 
     // 3. Handle non-OK HTTP status or non-JSON payloads
     if (!isHttpOk) {
-      let errorMessage = `n8n webhook returned HTTP ${httpStatus}`;
+      let errorMessage = `n8n webhook returned HTTP ${httpStatus}: ${rawText.substring(0, 300) || fetchResponse.statusText}`;
       if (isJson && parsedData && typeof parsedData === 'object') {
         if (parsedData.message) {
-          errorMessage = parsedData.message;
+          errorMessage = `HTTP ${httpStatus}: ${parsedData.message}`;
         } else if (parsedData.error) {
-          errorMessage = typeof parsedData.error === 'string' ? parsedData.error : JSON.stringify(parsedData.error);
+          errorMessage = `HTTP ${httpStatus}: ${typeof parsedData.error === 'string' ? parsedData.error : JSON.stringify(parsedData.error)}`;
         }
-      } else if (rawText && rawText.trim().length > 0) {
-        // Truncate if raw HTML or long string
-        errorMessage = rawText.length > 200 ? `${rawText.substring(0, 200)}...` : rawText;
       }
 
       return res.json({
@@ -141,6 +148,7 @@ app.post('/api/webhook-proxy', async (req, res) => {
         statusText: fetchResponse.statusText,
         isJson,
         data: parsedData,
+        rawText,
         error: errorMessage,
       });
     }
@@ -153,7 +161,8 @@ app.post('/api/webhook-proxy', async (req, res) => {
         statusText: fetchResponse.statusText,
         isJson: false,
         data: null,
-        error: 'The webhook did not return a valid JSON response. Please ensure your n8n workflow returns a JSON object with status and travelPlan.',
+        rawText,
+        error: `HTTP ${httpStatus}: Webhook returned non-JSON text: "${rawText.substring(0, 200)}"`,
       });
     }
 
@@ -164,6 +173,7 @@ app.post('/api/webhook-proxy', async (req, res) => {
       statusText: fetchResponse.statusText,
       isJson: true,
       data: parsedData,
+      rawText,
     });
   } catch (err: any) {
     console.error('Webhook proxy error:', err);
@@ -171,7 +181,7 @@ app.post('/api/webhook-proxy', async (req, res) => {
       success: false,
       status: 500,
       isJson: false,
-      error: err.message || 'Failed to connect to the n8n webhook. Please check network connectivity or webhook URL.',
+      error: `Network failure connecting to webhook: ${err.message || err}`,
     });
   }
 });
