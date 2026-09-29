@@ -103,27 +103,75 @@ app.post('/api/webhook-proxy', async (req, res) => {
       body: JSON.stringify(payload),
     });
 
-    const contentType = fetchResponse.headers.get('content-type') || '';
-    let responseData: any;
-    if (contentType.includes('application/json')) {
-      responseData = await fetchResponse.json();
-    } else {
-      responseData = await fetchResponse.text();
+    // 1. Check HTTP response status before parsing
+    const httpStatus = fetchResponse.status;
+    const isHttpOk = fetchResponse.ok; // 200-299
+
+    // 2. Read the response safely as text first
+    const rawText = await fetchResponse.text();
+    let isJson = false;
+    let parsedData: any = null;
+
+    if (rawText && rawText.trim().length > 0) {
+      try {
+        parsedData = JSON.parse(rawText);
+        isJson = true;
+      } catch {
+        isJson = false;
+      }
     }
 
+    // 3. Handle non-OK HTTP status or non-JSON payloads
+    if (!isHttpOk) {
+      let errorMessage = `n8n webhook returned HTTP ${httpStatus}`;
+      if (isJson && parsedData && typeof parsedData === 'object') {
+        if (parsedData.message) {
+          errorMessage = parsedData.message;
+        } else if (parsedData.error) {
+          errorMessage = typeof parsedData.error === 'string' ? parsedData.error : JSON.stringify(parsedData.error);
+        }
+      } else if (rawText && rawText.trim().length > 0) {
+        // Truncate if raw HTML or long string
+        errorMessage = rawText.length > 200 ? `${rawText.substring(0, 200)}...` : rawText;
+      }
+
+      return res.json({
+        success: false,
+        status: httpStatus,
+        statusText: fetchResponse.statusText,
+        isJson,
+        data: parsedData,
+        error: errorMessage,
+      });
+    }
+
+    // 4. HTTP is OK (2xx), verify that response is valid JSON
+    if (!isJson) {
+      return res.json({
+        success: false,
+        status: httpStatus,
+        statusText: fetchResponse.statusText,
+        isJson: false,
+        data: null,
+        error: 'The webhook did not return a valid JSON response. Please ensure your n8n workflow returns a JSON object with status and travelPlan.',
+      });
+    }
+
+    // Success response with parsed JSON
     res.json({
-      success: fetchResponse.ok,
-      status: fetchResponse.status,
+      success: true,
+      status: httpStatus,
       statusText: fetchResponse.statusText,
-      data: responseData,
-      error: !fetchResponse.ok ? (typeof responseData === 'object' && responseData?.message ? responseData.message : `Webhook responded with HTTP status ${fetchResponse.status}`) : undefined,
+      isJson: true,
+      data: parsedData,
     });
   } catch (err: any) {
     console.error('Webhook proxy error:', err);
     res.status(500).json({
       success: false,
       status: 500,
-      error: err.message || 'Failed to dispatch webhook to n8n',
+      isJson: false,
+      error: err.message || 'Failed to connect to the n8n webhook. Please check network connectivity or webhook URL.',
     });
   }
 });

@@ -353,10 +353,10 @@ export const SearchHero: React.FC<SearchHeroProps> = ({
           {/* Clear Error Message if request fails */}
           {webhookError && !isGenerating && (
             <div className="mt-4 p-4 rounded-xl bg-rose-950/60 border border-rose-500/60 text-xs text-rose-200 flex items-start gap-3">
-              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
               <div className="flex-1 space-y-1">
-                <div className="font-bold text-rose-300 flex items-center justify-between">
-                  <span>n8n Webhook Notice: {webhookError}</span>
+                <div className="font-bold text-rose-200 flex items-center justify-between">
+                  <span>Webhook Request Failed: {webhookError}</span>
                   {onOpenWebhookModal && (
                     <button
                       type="button"
@@ -364,12 +364,12 @@ export const SearchHero: React.FC<SearchHeroProps> = ({
                       className="text-teal-400 hover:underline flex items-center gap-1 text-[11px]"
                     >
                       <Zap className="w-3 h-3 text-amber-400" />
-                      Configure Webhook
+                      Check Webhook
                     </button>
                   )}
                 </div>
-                <p className="text-[11px] text-rose-300/80 leading-relaxed">
-                  TripGenie AI has smoothly loaded the complete travel plan and simulation data so your browsing is uninterrupted. Ensure your n8n workflow at <code className="bg-slate-950 px-1 py-0.5 rounded text-rose-200">https://bhagya4478.app.n8n.cloud/webhook/tripgenie-travel</code> is toggled <strong>Active</strong> in your n8n canvas editor.
+                <p className="text-[11px] text-rose-300/90 leading-relaxed">
+                  No simulated plan is displayed because the webhook request failed. Please check that your n8n workflow at <code className="bg-slate-950 px-1.5 py-0.5 rounded text-rose-200 font-mono text-[10px]">https://bhagya4478.app.n8n.cloud/webhook/tripgenie-travel</code> is toggled <strong>Active</strong> in n8n and returns a JSON object with <code className="bg-slate-950 px-1 py-0.5 rounded text-teal-300 font-mono text-[10px]">status</code> and <code className="bg-slate-950 px-1 py-0.5 rounded text-teal-300 font-mono text-[10px]">travelPlan</code>.
                 </p>
               </div>
             </div>

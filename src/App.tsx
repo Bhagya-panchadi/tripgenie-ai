@@ -155,19 +155,7 @@ export default function App() {
     setIsGenerating(true);
     setWebhookStatus('calling');
     setWebhookError(null);
-
-    // Compute updated sample datasets for destination
-    const newFlights = getSampleFlights(searchParams.departureCity, searchParams.destination, searchParams.travellers);
-    const newHotels = getSampleHotels(searchParams.destination, searchParams.travelStyle);
-    const newItinerary = getSampleItinerary(searchParams.destination, nights);
-    const newSightseeing = getSampleSightseeing(searchParams.destination);
-
-    setFlights(newFlights);
-    setSelectedFlightId(newFlights[0]?.id || 'fl-1');
-    setHotels(newHotels);
-    setSelectedHotelId(newHotels[0]?.id || 'ht-1');
-    setItinerary(newItinerary);
-    setSightseeing(newSightseeing);
+    setN8nPlanResult(null);
 
     // Prepare JSON payload with the exact requested parameters
     const webhookPayload = {
@@ -201,86 +189,95 @@ export default function App() {
         }),
       });
 
-      const result = await response.json();
+      // 1. Check HTTP response status before parsing
+      if (!response.ok) {
+        setWebhookStatus('error');
+        setWebhookError(`Network error: Proxy service returned HTTP ${response.status} (${response.statusText})`);
+        showNotificationToast(`Request error (HTTP ${response.status})`);
+        return;
+      }
 
-      if (response.ok && result.success) {
-        setWebhookStatus('success');
-        setWebhookError(null);
+      // 2. Read the response safely and parse JSON only when valid JSON
+      let result: any = null;
+      try {
+        result = await response.json();
+      } catch (parseErr) {
+        // 3. If response is not valid JSON, show a clear error message instead of displaying a JSON parsing error
+        setWebhookStatus('error');
+        setWebhookError('The server received an invalid or unparseable response. Expected a valid JSON object with status and travelPlan.');
+        showNotificationToast('Invalid response format received');
+        return;
+      }
 
-        // Parse response content from n8n webhook
-        // The n8n webhook returns a JSON response containing status and travelPlan
-        const raw = result.data;
-        let planContent = '';
-
-        if (typeof raw === 'string') {
-          try {
-            // In case n8n returned JSON serialized as string
-            const parsed = JSON.parse(raw);
-            planContent = parsed.travelPlan || parsed.travel_plan || parsed.plan || raw;
-          } catch {
-            planContent = raw;
-          }
-        } else if (raw && typeof raw === 'object') {
-          // Explicitly prioritize travelPlan as requested
-          if (raw.travelPlan && typeof raw.travelPlan === 'string') {
-            planContent = raw.travelPlan;
-          } else if (raw.travel_plan && typeof raw.travel_plan === 'string') {
-            planContent = raw.travel_plan;
-          } else if (raw.travelPlan && typeof raw.travelPlan === 'object') {
-            planContent = JSON.stringify(raw.travelPlan, null, 2);
-          } else if (raw.plan && typeof raw.plan === 'string') {
-            planContent = raw.plan;
-          } else if (raw.output && typeof raw.output === 'string') {
-            planContent = raw.output;
-          } else if (raw.text && typeof raw.text === 'string') {
-            planContent = raw.text;
-          } else if (raw.message && typeof raw.message === 'string') {
-            planContent = raw.message;
-          } else {
-            planContent = JSON.stringify(raw, null, 2);
-          }
-        }
-
-        // Intelligently parse Markdown sections: overview, flights, accommodation, itinerary, food, transportation, budget
-        const parsedSections = extractPlanSections(planContent);
-
-        setN8nPlanResult({
-          source: 'n8n_webhook',
-          summary: `Curated AI Travel Plan for ${searchParams.destination}`,
-          rawResponse: raw,
-          destination: searchParams.destination,
-          receivedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-          travelPlan: planContent,
-          sections: parsedSections,
-        });
-
-        showNotificationToast(`Received AI travel plan from n8n webhook!`);
-
-        // Smooth scroll to display the returned plan
-        setTimeout(() => {
-          const planSection = document.getElementById('n8n-live-plan');
-          if (planSection) {
-            planSection.scrollIntoView({ behavior: 'smooth' });
-          }
-        }, 100);
-      } else {
-        // Request failed: show clear error message and preserve UI with local AI plan
-        const errorMsg = result.error || (result.data && typeof result.data === 'object' && result.data.message) || `Webhook error (HTTP ${result.status || 500})`;
+      // Check if proxy encountered an error or non-OK response from the n8n webhook
+      if (!result.success) {
+        const errorMsg = result.error || (result.data && typeof result.data === 'object' && result.data.message) || `n8n Webhook returned HTTP ${result.status || 'Error'}`;
         setWebhookStatus('error');
         setWebhookError(errorMsg);
         showNotificationToast(`n8n Webhook Notice: ${errorMsg}`);
-
-        // Smooth scroll down to the generated itinerary so user experience is uninterrupted
-        setTimeout(() => {
-          const flightsSec = document.getElementById('flights');
-          if (flightsSec) {
-            flightsSec.scrollIntoView({ behavior: 'smooth' });
-          }
-        }, 300);
+        // 5. Do not show simulated or sample travel plans when the webhook request fails
+        return;
       }
+
+      // 4. Verify data structure from n8n webhook (status and travelPlan fields)
+      const data = result.data;
+      if (!data || typeof data !== 'object') {
+        setWebhookStatus('error');
+        setWebhookError('The webhook response did not contain a valid JSON object. Expected { status, travelPlan }.');
+        showNotificationToast('Invalid JSON structure from webhook');
+        return;
+      }
+
+      // Check status field
+      const statusValue = String(data.status || '').toLowerCase().trim();
+      const isSuccess = statusValue === 'success' || statusValue === 'ok' || statusValue === 'true' || !data.status;
+
+      if (!isSuccess) {
+        const errorMsg = data.message || data.error || `Webhook indicated status: "${data.status}"`;
+        setWebhookStatus('error');
+        setWebhookError(errorMsg);
+        showNotificationToast(`Webhook status: ${errorMsg}`);
+        return;
+      }
+
+      // Extract travelPlan field specifically
+      const travelPlanRaw = data.travelPlan || data.travel_plan || data.plan;
+      if (!travelPlanRaw) {
+        setWebhookStatus('error');
+        setWebhookError('Webhook returned status success, but the "travelPlan" field was empty or missing.');
+        showNotificationToast('Missing travelPlan in response');
+        return;
+      }
+
+      const planContent = typeof travelPlanRaw === 'string' ? travelPlanRaw : JSON.stringify(travelPlanRaw, null, 2);
+
+      // Intelligently parse Markdown sections: overview, flights, accommodation, itinerary, food, transportation, budget
+      const parsedSections = extractPlanSections(planContent);
+
+      setWebhookStatus('success');
+      setWebhookError(null);
+      setN8nPlanResult({
+        source: 'n8n_webhook',
+        summary: `Curated AI Travel Plan for ${searchParams.destination}`,
+        rawResponse: data,
+        destination: searchParams.destination,
+        receivedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        travelPlan: planContent,
+        sections: parsedSections,
+      });
+
+      showNotificationToast('Received AI travel plan from n8n webhook!');
+
+      // Smooth scroll to display the returned plan
+      setTimeout(() => {
+        const planSection = document.getElementById('n8n-live-plan');
+        if (planSection) {
+          planSection.scrollIntoView({ behavior: 'smooth' });
+        }
+      }, 100);
     } catch (err: any) {
       console.error('Failed to dispatch to n8n webhook:', err);
-      const errorMsg = err.message || 'Network failure connecting to n8n webhook';
+      const errorMsg = err.message || 'Failed to connect to the n8n webhook. Please check network connectivity.';
       setWebhookStatus('error');
       setWebhookError(errorMsg);
       showNotificationToast(`Webhook error: ${errorMsg}`);
@@ -307,6 +304,7 @@ export default function App() {
         isWebhookConnected={webhookConfig.isActive}
         onOpenChat={() => setChatOpen(true)}
         hasLivePlan={!!n8nPlanResult}
+        hasError={webhookStatus === 'error'}
       />
 
       {/* Main Content Sections */}
@@ -322,7 +320,7 @@ export default function App() {
           onOpenWebhookModal={() => setWebhookModalOpen(true)}
         />
 
-        {/* Live n8n Travel Plan Section (Displayed when webhook returns an AI travel plan) */}
+        {/* Live n8n Travel Plan Section (Displayed when webhook returns status success and travelPlan) */}
         {n8nPlanResult && (
           <N8nPlanDisplay
             planResult={n8nPlanResult}
@@ -331,44 +329,49 @@ export default function App() {
           />
         )}
 
-        {/* Flight Search Section */}
-        <FlightSection
-          flights={flights}
-          selectedFlightId={selectedFlightId}
-          onSelectFlight={handleSelectFlight}
-          searchParams={searchParams}
-          onOpenWebhookModal={() => setWebhookModalOpen(true)}
-        />
+        {/* When the webhook request fails, do not show simulated or sample travel plans */}
+        {webhookStatus !== 'error' && !n8nPlanResult && (
+          <>
+            {/* Flight Search Section */}
+            <FlightSection
+              flights={flights}
+              selectedFlightId={selectedFlightId}
+              onSelectFlight={handleSelectFlight}
+              searchParams={searchParams}
+              onOpenWebhookModal={() => setWebhookModalOpen(true)}
+            />
 
-        {/* Hotel Recommendations Section */}
-        <HotelSection
-          hotels={hotels}
-          selectedHotelId={selectedHotelId}
-          onSelectHotel={handleSelectHotel}
-          searchParams={searchParams}
-          onOpenWebhookModal={() => setWebhookModalOpen(true)}
-        />
+            {/* Hotel Recommendations Section */}
+            <HotelSection
+              hotels={hotels}
+              selectedHotelId={selectedHotelId}
+              onSelectHotel={handleSelectHotel}
+              searchParams={searchParams}
+              onOpenWebhookModal={() => setWebhookModalOpen(true)}
+            />
 
-        {/* AI-Generated Itineraries Section */}
-        <ItinerarySection
-          itinerary={itinerary}
-          searchParams={searchParams}
-          onRegenerate={handleGeneratePlan}
-          isGenerating={isGenerating}
-        />
+            {/* AI-Generated Itineraries Section */}
+            <ItinerarySection
+              itinerary={itinerary}
+              searchParams={searchParams}
+              onRegenerate={handleGeneratePlan}
+              isGenerating={isGenerating}
+            />
 
-        {/* Sightseeing & Experiences Section */}
-        <SightseeingSection
-          spots={sightseeing}
-          searchParams={searchParams}
-        />
+            {/* Sightseeing & Experiences Section */}
+            <SightseeingSection
+              spots={sightseeing}
+              searchParams={searchParams}
+            />
 
-        {/* Trip Budget Breakdown Section */}
-        <BudgetBreakdownSection
-          budget={budget}
-          searchParams={searchParams}
-          onOpenWebhookModal={() => setWebhookModalOpen(true)}
-        />
+            {/* Trip Budget Breakdown Section */}
+            <BudgetBreakdownSection
+              budget={budget}
+              searchParams={searchParams}
+              onOpenWebhookModal={() => setWebhookModalOpen(true)}
+            />
+          </>
+        )}
       </main>
 
       {/* Floating Ask AI Button for Easy Mobile / Desktop Access */}

@@ -8,6 +8,7 @@ interface NavbarProps {
   isWebhookConnected: boolean;
   onOpenChat: () => void;
   hasLivePlan?: boolean;
+  hasError?: boolean;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -17,17 +18,22 @@ export const Navbar: React.FC<NavbarProps> = ({
   isWebhookConnected,
   onOpenChat,
   hasLivePlan = false,
+  hasError = false,
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const navItems = [
     { id: 'search', label: 'Plan Trip', icon: Compass },
     ...(hasLivePlan ? [{ id: 'n8n-live-plan', label: 'n8n Travel Plan', icon: Zap }] : []),
-    { id: 'flights', label: 'Flights', icon: Plane },
-    { id: 'hotels', label: 'Hotels', icon: Hotel },
-    { id: 'itinerary', label: 'AI Itinerary', icon: Calendar },
-    { id: 'sightseeing', label: 'Sightseeing', icon: MapPin },
-    { id: 'budget', label: 'Budget Breakdown', icon: Calculator },
+    ...(!hasLivePlan && !hasError
+      ? [
+          { id: 'flights', label: 'Flights', icon: Plane },
+          { id: 'hotels', label: 'Hotels', icon: Hotel },
+          { id: 'itinerary', label: 'AI Itinerary', icon: Calendar },
+          { id: 'sightseeing', label: 'Sightseeing', icon: MapPin },
+          { id: 'budget', label: 'Budget Breakdown', icon: Calculator },
+        ]
+      : []),
   ];
 
   const handleNavClick = (id: string) => {
